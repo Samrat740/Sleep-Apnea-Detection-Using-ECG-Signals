@@ -1,80 +1,72 @@
-import streamlit as st
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from tensorflow.keras.models import load_model
+import io
 
-# Load trained CNN model
-MODEL_PATH = "apnea_cnn_v2_best.h5"
+# ===============================
+# ⚙️ Initialize FastAPI app
+# ===============================
+app = FastAPI(title="Sleep Apnea Detection API", description="Detects sleep apnea from ECG signals.")
+
+# Allow frontend (React / Firebase) access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or replace with your Firebase domain for security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ===============================
+# 🧠 Load Trained CNN Model
+# ===============================
+MODEL_PATH = "model/apnea_cnn_v2_best.h5"
 model = load_model(MODEL_PATH)
 
-st.set_page_config(page_title="Sleep Apnea Detector", page_icon="💤", layout="centered")
+# ===============================
+# 🩺 Root Endpoint
+# ===============================
+@app.get("/")
+def home():
+    return {"message": "Sleep Apnea Detection API is running!"}
 
-st.title("💤 Sleep Apnea Detection from ECG")
-st.write("Upload an ECG CSV file to visualize and analyze for potential Sleep Apnea risk.")
+# ===============================
+# 🔍 ECG Prediction Endpoint
+# ===============================
+@app.post("/predict")
+async def predict_apnea(file: UploadFile = File(...)):
+    try:
+        # Read uploaded CSV
+        contents = await file.read()
+        data = pd.read_csv(io.BytesIO(contents))
 
-uploaded_file = st.file_uploader("📁 Upload ECG CSV", type=["csv"])
+        # Check for ECG column
+        if "ECG" not in data.columns:
+            return {"error": "Invalid CSV format. Must contain 'ECG' column."}
 
-# Only show "Analyze" button after file is uploaded
-if uploaded_file is not None:
-    st.success("✅ File uploaded successfully.")
-    analyze = st.button("🔍 Analyze ECG")
+        # Preprocess ECG
+        ecg_signal = data["ECG"].values
+        ecg_signal = (ecg_signal - np.mean(ecg_signal)) / np.std(ecg_signal)
+        ecg_signal = ecg_signal[:6000]  # Use 60 seconds (100 Hz * 60)
+        ecg_signal = np.expand_dims(ecg_signal, axis=(0, 2))
 
-    if analyze:
-        try:
-            # Load ECG data
-            data = pd.read_csv(uploaded_file)
-            if "ECG" not in data.columns:
-                st.error("❌ Invalid file format. Please upload a CSV containing one 'ECG' column.")
-            else:
-                ecg_signal = data["ECG"].values
+        # Predict apnea probability
+        prob = float(model.predict(ecg_signal)[0][0] * 100)
 
-                # Normalize ECG before feeding to model
-                ecg_signal = (ecg_signal - np.mean(ecg_signal)) / np.std(ecg_signal)
-                ecg_signal = ecg_signal[:6000]  # Use 60 seconds (100 Hz * 60)
-                ecg_signal = np.expand_dims(ecg_signal, axis=(0, 2))
+        # Determine result
+        if prob > 70:
+            status = "Sleep Apnea Detected"
+        elif 30 <= prob <= 70:
+            status = "Likely Apnea Condition"
+        else:
+            status = "Normal ECG Pattern"
 
-                # Predict apnea probability
-                with st.spinner("🧠 Analyzing ECG..."):
-                    prob = model.predict(ecg_signal)[0][0] * 100
+        return {
+            "probability": round(prob, 2),
+            "status": status
+        }
 
-                # 🩺 ECG Visualization — Medical Paper Style
-                st.subheader("📈 ECG Waveform (Medical View)")
-
-                fig, ax = plt.subplots(figsize=(10, 3))
-                ax.plot(data["ECG"], color="#e63946", linewidth=1.2)
-
-                # ECG-style background grid
-                ax.set_facecolor("#fffafa")  # light white-pink background
-                ax.set_xticks(np.arange(0, len(data), 50))
-                ax.set_yticks(np.arange(int(min(data["ECG"])), int(max(data["ECG"])) + 1, 0.2))
-                ax.grid(which='major', color='#ffb3b3', linestyle='-', linewidth=0.6)
-                ax.grid(which='minor', color='#ffe6e6', linestyle='--', linewidth=0.4)
-                ax.minorticks_on()
-
-                # Hide axes and borders
-                ax.set_xticklabels([])
-                ax.set_yticklabels([])
-                ax.set_xlim(0, len(data))
-                ax.set_title("Lead II ECG (Sample Segment)", fontsize=14, fontweight="bold", color="#333")
-                for spine in ax.spines.values():
-                    spine.set_visible(False)
-
-                st.pyplot(fig)
-
-                # 🧠 Prediction Output
-                st.subheader("🧠 Model Result")
-                st.write(f"**Apnea Probability:** `{prob:.2f}%`")
-
-                if prob > 70:
-                    st.error("🚨 Sleep Apnea Detected")
-                elif 30 <= prob <= 70:
-                    st.warning("⚠️ Likely Apnea Condition")
-                else:
-                    st.success("✅ Normal ECG Pattern")
-
-        except Exception as e:
-            st.error(f"⚠️ Error processing file: {e}")
-
-else:
-    st.info("⬆️ Please upload an ECG CSV file to begin.")
+    except Exception as e:
+        return {"error": f"Error processing file: {str(e)}"}
