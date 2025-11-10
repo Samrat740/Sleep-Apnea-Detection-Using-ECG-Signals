@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 
-BASE_DIR = "model/apnea-ecg-database-1.0.0"
+BASE_DIR = "apnea-ecg-database-1.0.0"
 fs = 100        # Hz
 duration = 60   # seconds
 
